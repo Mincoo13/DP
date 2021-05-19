@@ -1,14 +1,20 @@
 import os
 import csv
+import json
 import pickle
+import itertools
 import collections
+import skimage.draw
+import numpy as np
 import pandas as pd
 import seaborn as sns
-import numpy as np
 from numpy import genfromtxt
-    
+from PIL import Image, ImageDraw
+
 import cv2
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.ticker import MaxNLocator
 
 from keras.utils import to_categorical
 from keras.models import model_from_json
@@ -20,22 +26,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.manifold import TSNE
 from sklearn.metrics import confusion_matrix
 
+from mrcnn import visualize
+
 def cm_analysis(y_true, y_pred, labels, path, ymap=None, figsize=(10, 10), title=""):
-    """
-    Generate matrix plot of confusion matrix with pretty annotations.
-    The plot image is saved to disk.
-    args:
-      y_true:    true label of the data, with shape (nsamples,)
-      y_pred:    prediction of the data, with shape (nsamples,)
-      filename:  filename of figure file to save
-      labels:    string array, name the order of class labels in the confusion matrix.
-                 use `clf.classes_` if using scikit-learn models.
-                 with shape (nclass,).
-      ymap:      dict: any -> string, length == nclass.
-                 if not None, map the labels & ys to more understandable strings.
-                 Caution: original y_true, y_pred and labels must align.
-      figsize:   the size of the figure plotted.
-    """
     if ymap is not None:
         y_pred = [ymap[yi] for yi in y_pred]
         y_true = [ymap[yi] for yi in y_true]
@@ -114,6 +107,18 @@ def load_model(args):
     print('Hotovo')
     return model, model_name, history
 
+def save_extracted_model(clf, path):
+    pickle.dump(clf, open(path, 'wb'))
+
+def save_np(path, data):
+    with open(path, 'wb') as f:
+        np.save(f, data)
+
+def load_np(path):
+    with open(path, 'rb') as f:
+        data = np.load(f)
+        return data
+
 def prepare_data(args, model=False, orig_data=False):
     df = pd.read_csv(args['csv_path'], sep=args['csv_sep'])
     health_data = df['health'].to_numpy()
@@ -121,25 +126,12 @@ def prepare_data(args, model=False, orig_data=False):
     nums = collections.Counter(health_data).values()
     img_dim = args['img_dim']
 
-    # print(nums)
-    # plt.figure(figsize=(8, 8))
-    # plt.bar(labels, nums)
-    # plt.title('Zdravie')
-    # plt.xlabel('kategórie')
-    # plt.ylabel('počet')
-    # plt.show()
     x_data, y_data, ids = load_data(args, df, orig=orig_data)
-
 
     print('Spracovanie dat...')
     x_data = np.array(x_data)
     y_data = np.array(y_data)
     ids = np.array(ids)
-
-    plt.figure(figsize=(6, 6))
-    plt.imshow(x_data[0])
-    plt.title(y_data[0])
-    plt.close()
 
     x_data = x_data.astype('float32')/255
 
@@ -165,9 +157,6 @@ def prepare_data(args, model=False, orig_data=False):
             X_original_2 = TSNE(n_components=2).fit_transform(X_original)
             X_original_3 = TSNE(n_components=3).fit_transform(X_original)
 
-            # print(X_original.shape)
-            # print(Y.shape)
-
             np.savetxt(f"{minimized_name}\\2d_orig.csv",
                        X_original_2, delimiter=",")
             np.savetxt(f"{minimized_name}\\3d_orig.csv",
@@ -177,7 +166,6 @@ def prepare_data(args, model=False, orig_data=False):
             return
         print('Extrakcia priznakov...')
         model, model_name, _ = load_model(args)
-        # pred_classes = model.predict(X)
         model.summary()
         model.pop()
         model.pop()
@@ -198,6 +186,7 @@ def prepare_data(args, model=False, orig_data=False):
             np.savetxt(f"{minimized_name}\\3d_features.csv", X_3, delimiter=",")
             np.savetxt(f"{minimized_name}\\labels_features.csv", Y_ax, delimiter=",")
             print('Hotovo')
+        return
 
 
     X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2)
@@ -205,7 +194,42 @@ def prepare_data(args, model=False, orig_data=False):
 
     return X_train, X_test, X_val, Y_train, Y_test, Y_val, ids
 
-def generate_graph(graphs_path, suffix, history=None, intent=None, clf=None):
+def extract_features(data, model):
+    features = model.predict(data)
+    features_normalized = preprocessing.MinMaxScaler(feature_range=(0, 1))
+    data = features_normalized.fit_transform(features)
+    return data
+
+def prepare_extracted_data(args):
+    
+    img_dim = args['img_dim']
+    model_path = args['pretrained_model_path']
+    model_name = os.path.basename(os.path.normpath(model_path))
+    minimized_name = f"{args['minimized_path']}\\{model_name}_minimized"
+
+    X_train = load_np(f'{model_path}/X_train.npy')
+    X_test = load_np(f'{model_path}/X_test.npy')
+    X_val = load_np(f'{model_path}/X_val.npy')
+    Y_train = load_np(f'{model_path}/Y_train.npy')
+    Y_test = load_np(f'{model_path}/Y_test.npy')
+    Y_val = load_np(f'{model_path}/Y_val.npy')
+    ids = load_np(f'{model_path}/ids.npy')
+
+    print('Extrakcia priznakov...')
+    model, model_name, _ = load_model(args)
+    model.summary()
+    model.pop()
+    model.pop()
+    model = Model(inputs=model.inputs, outputs=model.layers[-1].output)
+    model.summary()
+    X_train = extract_features(X_train, model)
+    X_test = extract_features(X_test, model)
+    X_val = extract_features(X_val, model)
+    print('Hotovo')
+
+    return X_train, X_test, X_val, Y_train, Y_test, Y_val, ids
+
+def generate_line_graph(graphs_path, suffix, history=None, intent=None, clf=None):
     plt.figure(figsize=(8, 8))
     if clf:
         axes = plt.axes()
@@ -227,6 +251,12 @@ def generate_graph(graphs_path, suffix, history=None, intent=None, clf=None):
         x_label = 'Epochy'
         plt.plot(hstr[0], label=f'{title} trénovania')
         plt.plot(hstr[1], label=f'{title} validácie')
+    ax = plt.gca()
+    if clf:
+        plt.xlim(-1, len(hstr['mean_fit_time']))
+    else:
+        plt.xlim(-1, len(hstr[0]))
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     plt.grid(b=True, which='major', color='#666666', linestyle='-')
     plt.minorticks_on()
     plt.grid(b=True, which='minor', color='#666666', linestyle='-', alpha=0.2)
@@ -235,6 +265,35 @@ def generate_graph(graphs_path, suffix, history=None, intent=None, clf=None):
     plt.ylabel(title)
     plt.legend()
     plt.savefig(f'{graphs_path}{suffix}')
+    plt.close()
+
+def generate_segment_graph(graphs_path, y_pred, y_test, intent='leaf_count'):
+    if intent == 'leaf_count':
+        blue_patch_label = 'Predikované počty lístkov'
+        mag_patch_label = 'Reálne počty lístkov'
+        ylabel = 'Počet lístkov'
+        title = 'Počty lístkov po segmentácii'
+        save_name = 'leaf_count.png'
+    elif intent == 'area':
+        blue_patch_label = 'Predikovaná plocha v pixeloch'
+        mag_patch_label = 'Reálna plocha v pixeloch'
+        ylabel = 'Plocha v pixeloch'
+        title = 'Plocha v pixeloch'
+        save_name = 'area.png'
+    else:
+        return
+    blue_patch = mpatches.Patch(color='blue', label=blue_patch_label)
+    magenta_patch = mpatches.Patch(color='darkviolet', label=mag_patch_label)
+    plt.figure(figsize=[10, 4.8])
+    plt.legend(handles=[magenta_patch, blue_patch])
+    plt.plot(y_pred, 'b+', y_test, 'mx', alpha=0.5)
+    plt.ylabel(ylabel)
+    plt.xlabel('Inštancie')
+    plt.grid(b=True, which='major', color='#666666', linestyle='-')
+    plt.minorticks_on()
+    plt.grid(b=True, which='minor', color='#666666', linestyle='-', alpha=0.2)
+    plt.title(title)
+    plt.savefig(f'{graphs_path}/{save_name}')
     plt.close()
 
 def generate_reduced_graph(x_path, y_path, delimeter, graph_path, orig, dim='2D'):
@@ -256,7 +315,95 @@ def generate_reduced_graph(x_path, y_path, delimeter, graph_path, orig, dim='2D'
     plt.savefig(save_path)
     plt.close()
 
-def write_result(args, fieldnames, result):
-    with open(args["results_path"], 'a', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+def write_result(path, fieldnames, result):
+    with open(path, 'a', newline='') as f, open(path, 'r') as r:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=';')
+        data = [row for row in list(csv.reader(r))]
+        if len(data) is 0:
+            writer.writeheader()
         writer.writerow(result)
+
+def annotation_to_mask(args):
+    with open(args['annot_path']) as f:
+        data = json.load(f)
+    data = {k.split(".")[0]:v for k,v in data.items()}
+    actual_masks = {}
+    for im_id in data:
+        try:
+            im = Image.open(f"{args['imgs_path']}/{im_id}.jpg")
+            one_mask = []
+            for i, _ in enumerate(data[im_id]["regions"]):
+                x_points = data[im_id]["regions"][i]["shape_attributes"]["all_points_x"]
+                y_points = data[im_id]["regions"][i]["shape_attributes"]["all_points_y"]
+                leaf_points = []
+                for j, x_point in enumerate(x_points):
+                    leaf_points.append((x_point, y_points[j]))
+                img = Image.new("L", im.size, 0)
+                ImageDraw.Draw(img).polygon(list(map(tuple, leaf_points)),
+                                            outline=1, fill=1)
+                leaf_mask = np.array(img)
+                one_mask.append(leaf_mask)
+            actual_masks[im_id] = one_mask
+        except:
+            continue
+    return actual_masks
+
+def mask_to_rgb(mask, alpha=0.1, predicted=True, color='rainbow'):
+    if predicted:
+        leaf_count = mask.shape[2]
+    else:
+        leaf_count = mask.shape[0]
+
+    if color == 'rainbow':
+        color = visualize.random_colors(leaf_count)
+    else:
+        color = list(itertools.repeat(color, leaf_count))
+
+    print(mask.shape)
+    if predicted:
+        rgb_mask = np.zeros((mask.shape[0], mask.shape[1], 3))
+        for i in range(mask.shape[2]):
+            for c in range(3):
+                rgb_mask[:, :, c] = np.where(mask[:, :, i] != 0,
+                                             rgb_mask[:, :, c] *
+                                             (1 - alpha) + alpha *
+                                             color[i][c] * 255,
+                                             rgb_mask[:, :, c])
+    else:
+        rgb_mask = np.zeros((mask.shape[1], mask.shape[2], 3))
+        for i in range(mask.shape[0]):
+            for c in range(3):
+                rgb_mask[:, :, c] = np.where(mask[i, :, :] != 0,
+                                             rgb_mask[:, :, c] *
+                                             (1 - alpha) + alpha *
+                                             color[i][c] * 255,
+                                             rgb_mask[:, :, c])
+    return rgb_mask
+
+def color_splash(image, mask, color='black'):
+
+    if color == 'black':
+        bckgrnd = np.zeros([image.shape[0], image.shape[1], 3], dtype=np.uint8)
+        bckgrnd.fill(0)
+    elif color == 'gray':
+        bckgrnd = skimage.color.gray2rgb(skimage.color.rgb2gray(image)) * 255
+    elif color == 'overlap':
+        bckgrnd = image.copy()
+        hsv = cv2.cvtColor(bckgrnd, cv2.COLOR_BGR2HSV)
+        h, s, v = cv2.split(hsv)
+        shift_h = (h - 220)
+        shift_hsv = cv2.merge([shift_h, s, v])
+        bckgrnd = cv2.cvtColor(shift_hsv, cv2.COLOR_HSV2BGR)
+    else:
+        print('Nie je mozne aplikovat tuto farbu. Vyberte "black" alebo "gray".')
+        return
+    print(mask.shape)
+    if mask.shape[-1] > 0:
+        if color is 'overlap':
+            mask = mask_to_rgb(mask, alpha=0.5, color=(0, 168, 0))
+        else:
+            mask = (np.sum(mask, -1, keepdims=True) >= 1)
+        splash = np.where(mask, mask, bckgrnd).astype(np.uint8)
+    else:
+        splash = bckgrnd.astype(np.uint8)
+    return splash

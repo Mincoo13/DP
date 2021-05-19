@@ -2,7 +2,8 @@ import os
 import pickle
 import numpy as np
 import config as cfg
-from utils import cm_analysis, prepare_data, generate_graph, load_model, write_result
+from utils import cm_analysis, prepare_data, generate_line_graph, load_model
+from utils import write_result, save_np
 from train_health_model import set_model
 
 import cv2
@@ -30,7 +31,7 @@ def categorize_class(predict):
         predict = "sick"
     return predict
 
-X_train, X_test, X_val, Y_train, Y_test, Y_val, ids = prepare_data(args, (128, 128))
+X_train, X_test, X_val, Y_train, Y_test, Y_val, ids = prepare_data(args)
 ################################################################################
 
 input_shape = X_train.shape[1:]
@@ -53,6 +54,14 @@ else:
     with open(f'{model_path}.pickle', 'wb') as file_pi:
         pickle.dump(history, file_pi)
     print('Hotovo')
+
+save_np(f"{args['model_path']}/X_train.npy", X_train)
+save_np(f"{args['model_path']}/X_test.npy", X_test)
+save_np(f"{args['model_path']}/X_val.npy", X_val)
+save_np(f"{args['model_path']}/Y_train.npy", Y_train)
+save_np(f"{args['model_path']}/Y_test.npy", Y_test)
+save_np(f"{args['model_path']}/Y_val.npy", Y_val)
+save_np(f"{args['model_path']}/ids.npy", ids)
 
 ################################################################################
 suffix = {'heatmap': '_heatmap.jpg',
@@ -136,9 +145,8 @@ for idx in range(5):
 
     for i in range(len(outputs)):
         for z in range(5):
-            print(f"{i}, {z}")
             figure = outputs[i][0, :, :, z]
-            ax[i][z].imshow(figure, cmap='gray')
+            ax[i][z].imshow(figure)
             ax[i][z].set_title(layer_names[i])
             ax[i][z].set_xticks([])
             ax[i][z].set_yticks([])
@@ -149,8 +157,8 @@ print('Hotovo')
 ################################################################################
 print('Generovanie grafov...')
 
-generate_graph(graphs_path, suffix, history, 'accuracy')
-generate_graph(graphs_path, suffix, history, 'loss')
+generate_line_graph(graphs_path, suffix, history, 'accuracy')
+generate_line_graph(graphs_path, suffix, history, 'loss')
 
 plot_model(model, f'{graphs_path}{suffix["model"]}')
 
@@ -174,7 +182,7 @@ plt.close()
 accuracy = accuracy_score(y_pred, Y_test)
 cm_path = f'{graphs_path}{suffix["cm"]}'
 cm_analysis(Y_test, y_pred, Y_classes, cm_path, ymap=None, figsize=(8, 8),
-            title=f"Konfúzna matica [{accuracy} %]")
+            title=f"Konfúzna matica [{accuracy*100} %]")
 print('Hotovo')
 
 print('Presnosť:', accuracy)
@@ -182,10 +190,10 @@ print('Presnosť:', accuracy)
 result_row = {'model': model_name,
               'accuracy': accuracy,
               'test_size': len(y_pred),
-              'settings': None}
+              'settings': model.get_config()}
 fieldnames = ['model', 'accuracy', 'test_size', 'settings']
 
-write_result(args, fieldnames, result_row)
+write_result(args['results_path'], fieldnames, result_row)
 
 print(accuracy_score(y_pred, Y_test))
 print(len(y_pred))
