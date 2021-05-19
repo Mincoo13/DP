@@ -1,9 +1,13 @@
+leaf-segmentation
 new_dataset
+data
 dataset
 dataset_segmenter
 models
 train
 val
+graphs
+heatmaps
 *.csv
 *.jpg
 *.png
